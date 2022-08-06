@@ -6,13 +6,17 @@
   "license": "MIT",
   "private": true,
   "dependencies": {
-    "typescript": "^4.7.4"
+    "@aws-sdk/client-dynamodb": "^3.142.0",
+    "@aws-sdk/lib-dynamodb": "^3.142.0"
   },
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "prepackage": "rm -rf build && yarn build && yarn install --modules-folder build/nodejs/node_modules --prod",
+    "package": "cd build && zip -r veneer.zip veneer nodejs"
   },
   "devDependencies": {
     "@tsconfig/node14": "^1.0.3",
-    "@types/node": "^18.6.4"
+    "@types/node": "^18.6.4",
+    "typescript": "^4.7.4"
   }
 }
