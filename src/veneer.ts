@@ -1,15 +1,27 @@
 import { behaviours } from './behaviours';
-import { Duplex, PassThrough } from 'stream'
+import { ClientRequestArgs, IncomingMessage} from 'http';
+import { Duplex, PassThrough } from 'stream';
+
+// Extracts the options object from the arguments of a request call
+function getRequestOptions(args: any[]): [ClientRequestArgs, (res: IncomingMessage) => void] {
+    if (typeof args[0] == 'string') {
+        const url = new URL(args[0]);
+        return [
+            {
+                hostname: url.hostname,
+                ...args[1]
+            },
+            args[2]
+        ];
+    } else if (typeof args[0] == 'object') {
+        return [{ ...args[0] }, args[1]];
+    }
+    throw new Error('unable to parse request options');
+}
 
 (() => {
-    const lambdaName = process.env.AWS_LAMBDA_FUNCTION_NAME;
-    if (!lambdaName) {
-        throw Error('AWS_LAMBDA_FUNCTION_NAME not set');
-    }
-    const handler = process.env._HANDLER;
-    if (!handler) {
-        throw Error('_HANDLER not set');
-    }
+    const lambdaName = process.env.AWS_LAMBDA_FUNCTION_NAME || 'unknown-lambda';
+    const handler = process.env._HANDLER || 'unknown.handler';
 
     // Pre-load behaviours
     behaviours();
@@ -17,45 +29,71 @@ import { Duplex, PassThrough } from 'stream'
     // Wrap handler (incoming requests)
     console.log(`Initialising Veneer for Lambda "${lambdaName}": handler "${handler}"`);
     const [moduleName, handlerName] = handler.split('.');
-    const module = require(moduleName + '.js');
-    const handlerFunction = module[handlerName];
-    module[handlerName] = async (event: any) => {
-        console.log(`Handler invoked with event ${JSON.stringify(event)}`);
-        const { latencyMs = 0 } = behaviours()[lambdaName] || {};
+    try {
+        const module = require(moduleName + '.js');
+        const handlerFunction = module[handlerName];
+        module[handlerName] = async (event: any) => {
+            console.log(`Handler invoked with event ${JSON.stringify(event)}`);
+            const { latencyMs = 0 } = behaviours()[lambdaName] || {};
 
-        if (latencyMs) {
-            console.log(`Introducing ${latencyMs}ms latency`);
-            await new Promise((resolve) => setTimeout(resolve, latencyMs));
-        }
-
-        return handlerFunction(event);
-    };
-
-    // Wrap global https agent (outgoing requests)
-    const https = require('https');
-    const createConnection = https.globalAgent.createConnection.bind(https.globalAgent);
-    https.globalAgent['createConnection'] = (options: any) => {
-        const { host, port }: { host: string, port: string } = options;
-        console.log(`Outgoing connection requested to ${host}:${port}`);
-        const { latencyMs = 0 } = behaviours()[host] || {};
-
-        const readable = new PassThrough();
-        const writable = new PassThrough();
-        const wrappedStream = Duplex.from({ readable, writable });
-
-        const stream: Duplex = createConnection(options);
-        (async () => {
             if (latencyMs) {
                 console.log(`Introducing ${latencyMs}ms latency`);
                 await new Promise((resolve) => setTimeout(resolve, latencyMs));
             }
 
-            // TODO handle failure responses
+            return handlerFunction(event);
+        };
+    } catch (e) {
+        let message = 'Unknown error';
+        if (e instanceof Error) {
+            message = e.message;
+        }
+        console.log(`Unable to wrap lambda handler: ${message}`)
+    }
 
-            stream.pipe(readable);
-            writable.pipe(stream);
-        })();
+    // Wrap outgoing requests
+    const https = require('https');
+    const hsRequest = https.request
 
-        return wrappedStream;
+    // Wrap https request method (outgoing requests)
+    https.request = (...args: any[]) => {
+        let [requestOptions, callback] = getRequestOptions(args);
+        console.log(`Outgoing request intercepted: ${requestOptions.host || requestOptions.hostname}`);
+
+        const agent = requestOptions.agent || https.globalAgent;
+        requestOptions.agent = agent;
+
+        const createConnection = agent.createConnection;
+        agent.createConnection = (options: any) => {
+            const { host, port }: { host: string, port: string } = options;
+            console.log(`Outgoing connection requested to ${host}:${port}`);
+            const { latencyMs = 0 } = behaviours()[host] || {};
+
+            const readable = new PassThrough();
+            const writable = new PassThrough();
+            const wrappedStream = Duplex.from({ readable, writable });
+
+            const stream: Duplex = createConnection.bind(agent)(options);
+            (async () => {
+                if (latencyMs) {
+                    console.log(`Introducing ${latencyMs}ms latency`);
+                    await new Promise((resolve) => setTimeout(resolve, latencyMs));
+                }
+
+                // TODO handle failure responses
+
+                stream.pipe(readable);
+                writable.pipe(stream);
+            })();
+
+            return wrappedStream;
+        }
+
+        const clientRequest = hsRequest(requestOptions, callback);
+
+        // Restore original createConnection method
+        agent.createConnection = createConnection;
+
+        return clientRequest;
     }
 })();

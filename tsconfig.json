@@ -4,6 +4,7 @@
     "./src/*.ts"
   ],
   "compilerOptions": {
-    "outDir": "./build/veneer"
+    "outDir": "./build/veneer",
+    "esModuleInterop": true
   }
 }
