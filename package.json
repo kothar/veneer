@@ -7,7 +7,7 @@
   "private": true,
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.142.0",
-    "@aws-sdk/lib-dynamodb": "^3.142.0",
+    "@aws-sdk/lib-dynamodb": "^3.142.0"
   },
   "scripts": {
     "build": "tsc",
