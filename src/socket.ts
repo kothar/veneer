@@ -1,12 +1,12 @@
-import { Socket, SocketConnectOpts } from 'net';
+import { Socket, SocketConnectOpts, SocketConstructorOpts } from 'net';
 
 export class InterceptedSocket extends Socket {
-    intercept(realSocket: Socket) {
 
+    constructor(options: SocketConstructorOpts) {
+        super(options);
     }
 
-    override connect(...args: [any]): this {
+    intercept(realSocket: Socket) {
 
-        return super.connect(...args);
     }
 }

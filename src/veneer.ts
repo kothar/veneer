@@ -1,6 +1,7 @@
 import { behaviours } from './behaviours';
-import { ClientRequestArgs, IncomingMessage} from 'http';
-import { Duplex, PassThrough } from 'stream';
+import { ClientRequestArgs, IncomingMessage } from 'http';
+import { globalAgent as httpGlobalAgent } from 'http';
+import { globalAgent as httpsGlobalAgent } from 'https';
 
 // Extracts the options object from the arguments of a request call
 function getRequestOptions(args: any[]): [ClientRequestArgs, (res: IncomingMessage) => void] {
@@ -19,12 +20,42 @@ function getRequestOptions(args: any[]): [ClientRequestArgs, (res: IncomingMessa
     throw new Error('unable to parse request options');
 }
 
+function wrapAgent(agent: any) {
+    if (!agent || agent.__veneer__) {
+        return;
+    }
+
+    const createConnection = agent.createConnection;
+    agent.createConnection = (options: any) => {
+        const { host, port }: { host: string, port: string } = options;
+        console.log(`Outgoing connection requested to ${host}:${port}`);
+        const { latencyMs = 0 } = behaviours()[host] || {};
+
+        const socket = createConnection.bind(agent)(options);
+
+        if (latencyMs) {
+            console.log(`Introducing ${latencyMs}ms latency`);
+            socket.pause();
+            (async () => {
+                await new Promise((resolve) => setTimeout(resolve, latencyMs));
+                socket.resume();
+            })();
+
+            // TODO handle failure responses
+        }
+        return socket;
+    }
+    agent.__veneer__ = true;
+}
+
 (() => {
     const lambdaName = process.env.AWS_LAMBDA_FUNCTION_NAME || 'unknown-lambda';
     const handler = process.env._HANDLER || 'unknown.handler';
 
     // Pre-load behaviours
     behaviours();
+    wrapAgent(httpsGlobalAgent);
+    wrapAgent(httpGlobalAgent);
 
     // Wrap handler (incoming requests)
     console.log(`Initialising Veneer for Lambda "${lambdaName}": handler "${handler}"`);
@@ -60,40 +91,7 @@ function getRequestOptions(args: any[]): [ClientRequestArgs, (res: IncomingMessa
         let [requestOptions, callback] = getRequestOptions(args);
         console.log(`Outgoing request intercepted: ${requestOptions.host || requestOptions.hostname}`);
 
-        const agent = requestOptions.agent || https.globalAgent;
-        requestOptions.agent = agent;
-
-        const createConnection = agent.createConnection;
-        agent.createConnection = (options: any) => {
-            const { host, port }: { host: string, port: string } = options;
-            console.log(`Outgoing connection requested to ${host}:${port}`);
-            const { latencyMs = 0 } = behaviours()[host] || {};
-
-            const readable = new PassThrough();
-            const writable = new PassThrough();
-            const wrappedStream = Duplex.from({ readable, writable });
-
-            const stream: Duplex = createConnection.bind(agent)(options);
-            (async () => {
-                if (latencyMs) {
-                    console.log(`Introducing ${latencyMs}ms latency`);
-                    await new Promise((resolve) => setTimeout(resolve, latencyMs));
-                }
-
-                // TODO handle failure responses
-
-                stream.pipe(readable);
-                writable.pipe(stream);
-            })();
-
-            return wrappedStream;
-        }
-
-        const clientRequest = hsRequest(requestOptions, callback);
-
-        // Restore original createConnection method
-        agent.createConnection = createConnection;
-
-        return clientRequest;
+        wrapAgent(requestOptions.agent);
+        return hsRequest(requestOptions, callback);
     }
 })();

@@ -8,7 +8,7 @@ export type Behaviour = {
 
 let cachedBehaviours: Record<string, Behaviour> = {
     'google.com': {
-        latencyMs: 100
+        latencyMs: 2000
     }
 }
 let nextUpdate: number;
