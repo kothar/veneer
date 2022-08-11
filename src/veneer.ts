@@ -1,23 +1,16 @@
 import { behaviour, refreshBehaviours } from './behaviours';
 import { hookAgent } from './agent';
-import http, { globalAgent as httpGlobalAgent, ClientRequestArgs, IncomingMessage } from 'http';
+import http, { globalAgent as httpGlobalAgent, ClientRequestArgs } from 'http';
 import https, { globalAgent as httpsGlobalAgent } from 'https';
 
 // Extracts the options object from the arguments of a request call
-function getRequestOptions(args: any[]): [ClientRequestArgs, (res: IncomingMessage) => void] {
+function getRequestOptions(args: any[]): ClientRequestArgs {
     if (typeof args[0] == 'string') {
-        const url = new URL(args[0]);
-        return [
-            {
-                hostname: url.hostname,
-                ...args[1]
-            },
-            args[2]
-        ];
+        return args[1];
     } else if (typeof args[0] == 'object') {
-        return [{ ...args[0] }, args[1]];
+        return args[0];
     }
-    throw new Error('unable to parse request options');
+    throw new Error('unable to find request options');
 }
 
 (() => {
@@ -35,7 +28,7 @@ function getRequestOptions(args: any[]): [ClientRequestArgs, (res: IncomingMessa
     try {
         const module = require(moduleName + '.js');
         const handlerFunction = module[handlerName];
-        module[handlerName] = async (event: any) => {
+        module[handlerName] = async (event: any, context: any, callback: any) => {
             console.log(`Handler invoked with event ${JSON.stringify(event)}`);
             const { latencyMs = 0 } = behaviour(lambdaName);
 
@@ -44,7 +37,7 @@ function getRequestOptions(args: any[]): [ClientRequestArgs, (res: IncomingMessa
                 await new Promise((resolve) => setTimeout(resolve, latencyMs));
             }
 
-            return handlerFunction(event);
+            return handlerFunction(event, context, callback);
         };
     } catch (e) {
         let message = 'Unknown error';
@@ -59,9 +52,11 @@ function getRequestOptions(args: any[]): [ClientRequestArgs, (res: IncomingMessa
         ['request', 'get'].forEach(name => {
             const method = module[name];
             module[name] = (...args: any[]) => {
-                let [requestOptions, callback] = getRequestOptions(args);
-                hookAgent(requestOptions.agent);
-                return method(requestOptions, callback);
+                const requestOptions = getRequestOptions(args);
+                if (requestOptions?.agent) {
+                    hookAgent(requestOptions.agent)
+                }
+                return method(...args);
             }
         });
     });
