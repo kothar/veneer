@@ -18,7 +18,7 @@ function getRequestOptions(args: any[]): ClientRequestArgs {
     const handler = process.env._HANDLER || 'unknown.handler';
 
     // Pre-load behaviours
-    refreshBehaviours().catch(console.error);
+    const init = refreshBehaviours();
     hookAgent(httpsGlobalAgent);
     hookAgent(httpGlobalAgent);
 
@@ -29,6 +29,8 @@ function getRequestOptions(args: any[]): ClientRequestArgs {
         const module = require(moduleName + '.js');
         const handlerFunction = module[handlerName];
         module[handlerName] = async (event: any, context: any, callback: any) => {
+            await init;
+
             console.log(`Handler invoked with event ${JSON.stringify(event)}`);
             const { latencyMs = 0 } = behaviour(lambdaName);
 
