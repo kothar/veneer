@@ -1,29 +1,53 @@
+import http from 'http';
+import https from 'https';
+import { Socket } from 'net';
 import { behaviour } from './behaviours';
+import { FakeSocket } from './fakesocket';
 
-export function hookAgent(agent: any) {
-    if (!agent || agent.__veneer__) {
+export interface VeneerAgent extends https.Agent {
+    createConnection: (options: any) => Socket;
+    __veneer__: boolean
+}
+
+export function hookAgent(agent: http.Agent) {
+    const vAgent = agent as unknown as VeneerAgent;
+    if (!vAgent || vAgent.__veneer__) {
         return;
     }
 
-    const createConnection = agent.createConnection;
-    agent.createConnection = (options: any) => {
+    const createConnection = vAgent.createConnection;
+    vAgent.createConnection = (options: any) => {
         const { host, port }: { host: string, port: string } = options;
         console.log(`Outgoing connection intercepted for ${host}:${port}`);
-        const { latencyMs = 0 } = behaviour(host);
+        const { latency = { ms: 0 }, response } = behaviour(host);
 
-        // TODO handle failure responses
+        if (response) {
+            const statusCode = response?.statusCode || 200;
+            console.log(`Modifying response with statusCode ${statusCode} and latency ${latency.ms}ms`)
+            const [client, server] = FakeSocket.createPair();
+            setTimeout(() => {
+                const header =
+                    `HTTP/1.1 ${statusCode} ${http.STATUS_CODES[statusCode] || 'ERROR'}\r\n` +
+                    `Content-Type: ${response.contentType || 'text/plain'}\r\n\r\n`;
+                server.write(header);
+                server.end(response.body);
+            }, latency.ms);
+            return client;
 
-        const socket = createConnection.bind(agent)(options);
-        if (latencyMs) {
-            console.log(`Introducing ${latencyMs}ms latency`);
-            socket.pause();
-            (async () => {
-                await new Promise((resolve) => setTimeout(resolve, latencyMs));
-                socket.resume();
-            })();
+        } else {
+            const socket = createConnection.bind(agent)(options);
+
+            if (latency.ms) {
+                console.log(`Introducing ${latency.ms}ms latency`);
+                socket.pause();
+                (async () => {
+                    await new Promise((resolve) => setTimeout(resolve, latency.ms));
+                    socket.resume();
+                })();
+            }
+            return socket;
         }
-        return socket;
     }
 
-    agent.__veneer__ = true;
+    vAgent.__veneer__ = true;
 }

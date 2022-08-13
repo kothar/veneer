@@ -2,13 +2,34 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb'
 import { DynamoDBDocumentClient, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
 import https from 'https';
+import { VeneerAgent } from './agent';
 
-export type Behaviour = {
-    priority?: number
-    latencyMs?: number
+export interface Weighted {
+    weight?: number
 }
 
-let cachedBehaviours: Record<string, Behaviour> = {};
+export interface Latency extends Weighted {
+    ms?: number
+}
+
+export interface Response extends Weighted {
+    intercept?: boolean,
+    statusCode?: number,
+    contentType?: string;
+    body?: string
+}
+
+export type Behaviour = {
+    latency?: Latency[]
+    response?: Response[]
+}
+
+export type SelectedBehaviour = {
+    latency?: Latency
+    response?: Response
+}
+
+export const cachedBehaviours = new Map<string, Behaviour>();
 let missingBehaviours: Record<string, boolean> = {};
 let nextUpdate: number;
 
@@ -27,10 +48,11 @@ export async function refreshBehaviours() {
         const configTable = process.env.VENEER_CONFIG_TABLE;
         if (!configTable) {
             console.log('No config table specified');
+            return;
         }
 
-        const agent = new https.Agent();
-        (agent as any)['__veneer__'] = true;
+        const agent = new https.Agent() as unknown as VeneerAgent;
+        agent.__veneer__ = true;
         const client = new DynamoDBClient({
             requestHandler: new NodeHttpHandler({
                 httpsAgent: agent
@@ -41,10 +63,10 @@ export async function refreshBehaviours() {
             TableName: configTable
         }))
 
-        cachedBehaviours = {};
+        cachedBehaviours.clear();
         results.Items?.forEach(record => {
             const { host } = record;
-            cachedBehaviours[host] = record as Behaviour;
+            cachedBehaviours.set(host, record as Behaviour);
             delete missingBehaviours[host];
         });
         console.log(`Updated behaviours for ${results.Items?.length} hosts`);
@@ -54,22 +76,67 @@ export async function refreshBehaviours() {
             await ddbDocClient.send(new PutCommand({
                 TableName: configTable,
                 ConditionExpression: 'attribute_not_exists(host)',
-                Item: { host, latencyMs: 0 }
+                Item: {
+                    host,
+                    latency: [{
+                        weight: 100,
+                        ms: 0
+                    }],
+                    response: [{
+                        weight: 100,
+                        intercept: false,
+                        statusCode: 200,
+                        contentType: 'text/plain',
+                        body: 'replacement'
+                    }]
+                } as Behaviour
             }));
             count++;
         }
         console.log(`Created behaviours for ${count} hosts`);
         missingBehaviours = {};
+
+    } catch (e) {
+        let message = e;
+        if (e instanceof Error) {
+            message = e.message;
+        }
+        console.error('Unable to load new behaviours:', message);
     } finally {
         refreshInProgress = false;
     }
 }
 
-export function behaviour(host: string): Behaviour {
+export function behaviour(host: string): SelectedBehaviour {
     refreshBehaviours().catch(console.error);
-    const cachedBehaviour = cachedBehaviours[host];
+    let cachedBehaviour = cachedBehaviours.get(host);
     if (!cachedBehaviour) {
         missingBehaviours[host] = true;
     }
-    return cachedBehaviour || {};
+    cachedBehaviour = cachedBehaviour || {};
+
+    return {
+        latency: selectWeighted(cachedBehaviour.latency || []),
+        response: selectWeighted(cachedBehaviour.response || [])
+    };
+}
+
+export function selectWeighted<T extends Weighted>(options: T[]): T | undefined {
+    if (!options.length) {
+        return undefined;
+    }
+
+    const total = options
+        .map(v => v.weight || 0)
+        .reduce((prev, current) => prev + current);
+
+    const selection = Math.random() * total;
+    let sum = 0;
+    for (const v of options) {
+        sum += v.weight || 0;
+        if (sum >= selection) {
+            return v;
+        }
+    }
+    return undefined;
 }

@@ -1,0 +1,147 @@
+// Extends behaviour of https://github.com/jaenster/fake-socket/blob/master/src/index.ts
+import { Duplex } from 'stream';
+import { AddressInfo, Socket, SocketConnectOpts, SocketReadyState } from 'net';
+import { FiFo } from '@jaenster/queues';
+
+
+type NoReadonly<T> = { -readonly [P in keyof T]: T[P] };
+
+const otherSym = Symbol('other');
+const notifySym = Symbol('notify');
+const fakeSockSym = Symbol('fakeSock');
+
+export class FakeSocket extends Duplex implements Socket {
+
+    // Data object with custom values
+    // @ts-ignore
+    [fakeSockSym] = {
+        // @ts-ignore
+        queue: new FiFo<Buffer>(FakeSocket.prototype[notifySym].bind(this)),
+        timeoutCount: 0,
+    };
+
+    [notifySym](this: NoReadonly<FakeSocket>) {
+        const { queue } = this[fakeSockSym];
+        const buffers = (queue as any).q.slice((queue as any).i) as Buffer[];
+
+        // set the buffersize
+        this.bufferSize = buffers.reduce((acc, cur) => (acc | 0) + (cur.length | 0), 0);
+
+        if (++this[fakeSockSym].timeoutCount === 1) {
+            // Next tick, fire all events
+            setTimeout(() => {
+                for (const buffer of queue) {
+                    this.emit('data', buffer);
+                    this.bytesRead += buffer.length;
+                    this.bufferSize -= buffer.length;
+                }
+                this[fakeSockSym].timeoutCount = 0;
+            })
+        }
+    }
+
+
+    static createPair(): [FakeSocket, FakeSocket] {
+        const one = new FakeSocket();
+        const two = new FakeSocket();
+
+        // @ts-ignore
+        (one as NoReadonly<FakeSocket>)[otherSym] = two;
+        // @ts-ignore
+        (two as NoReadonly<FakeSocket>)[otherSym] = one;
+
+        return [one, two];
+    }
+
+    readonly bufferSize: number = 0;
+    readonly bytesRead: number = 0;
+    readonly bytesWritten: number = 0;
+    readonly connecting: boolean = false;
+    readonly localAddress: string = 'fake-socket';
+    readonly localPort: number = 0;
+    readonly readyState: SocketReadyState = 'open';
+
+    address(): AddressInfo | string {
+        return 'fake-socket';
+    }
+
+    connect(options: SocketConnectOpts, connectionListener?: () => void): this;
+    connect(port: number, host: string, connectionListener?: () => void): this;
+    connect(port: number, connectionListener?: () => void): this;
+    connect(path: string, connectionListener?: () => void): this;
+    connect(...args: any[]): this {
+        args.filter(e => typeof e === 'function').forEach(setTimeout);
+        return this;
+    }
+
+    // write(chunk: any, encoding?: string, cb?: (error: Error | null | undefined) => void): boolean;
+    // write(chunk: any, cb?: (error: Error | null | undefined) => void): boolean;
+    write(...args: any[]): boolean {
+        args.filter(e => typeof e === 'function').forEach(e => setTimeout(() => e(undefined)));
+        let chunk: any = args[0];
+        if (typeof chunk === 'string') chunk = chunk.split('').map(el => el.charCodeAt(0)); // if string, convert to array of numbers
+        if (typeof chunk === 'number') chunk = [chunk]; // if number, convert to array of numbers
+        if (!(chunk instanceof Buffer)) chunk = Buffer.from(chunk);
+
+        // @ts-ignore
+        this[otherSym][fakeSockSym].queue.add(chunk);
+        (this as NoReadonly<FakeSocket>).bytesWritten += chunk.length;
+
+        return true;
+    }
+
+    end(...args: any[]): this {
+        if (typeof args[0] != 'function') {
+            this.write(...args)
+        } else {
+            args.filter(e => typeof e === 'function').forEach(e => setTimeout(() => e(undefined)));
+        }
+
+        return this.destroy();
+    }
+
+    _destroy(error: Error | null) {
+        setTimeout(() => {
+            if (error) {
+                // @ts-ignore
+                this[otherSym].emit('error', error);
+            }
+            // @ts-ignore
+            this[otherSym].emit('end');
+            // @ts-ignore
+            this[otherSym].emit('close');
+        })
+        return this;
+    }
+
+    // ToDo; implement these properly
+
+    ref(): this {
+        return this;
+    }
+
+    setKeepAlive(enable?: boolean, initialDelay?: number): this {
+        return this;
+    }
+
+    setNoDelay(noDelay?: boolean): this {
+        return this;
+    }
+
+    setTimeout(timeout: number, callback?: () => void): this {
+        return this;
+    }
+
+    unref(): this {
+        return this;
+    }
+
+    _read(...args: any[]) {
+        // required to implement / override
+    }
+
+    _write(...args: any[]) {
+        // required to implement / override
+    }
+
+}

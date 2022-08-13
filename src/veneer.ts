@@ -32,12 +32,14 @@ function getRequestOptions(args: any[]): ClientRequestArgs {
             await init;
 
             console.log(`Handler invoked with event ${JSON.stringify(event)}`);
-            const { latencyMs = 0 } = behaviour(lambdaName);
+            const { latency = { ms: 0 } } = behaviour(lambdaName);
 
-            if (latencyMs) {
-                console.log(`Introducing ${latencyMs}ms latency`);
-                await new Promise((resolve) => setTimeout(resolve, latencyMs));
+            if (latency.ms) {
+                console.log(`Introducing ${latency.ms}ms latency`);
+                await new Promise((resolve) => setTimeout(resolve, latency.ms));
             }
+
+            // TODO handle response modification
 
             return handlerFunction(event, context, callback);
         };
@@ -55,7 +57,7 @@ function getRequestOptions(args: any[]): ClientRequestArgs {
             const method = module[name];
             module[name] = (...args: any[]) => {
                 const requestOptions = getRequestOptions(args);
-                if (requestOptions?.agent) {
+                if (requestOptions?.agent && requestOptions?.agent !== true) {
                     hookAgent(requestOptions.agent)
                 }
                 return method(...args);
