@@ -21,7 +21,7 @@ export function hookAgent(agent: http.Agent) {
         console.log(`Outgoing connection intercepted for ${host}:${port}`);
         const { latency = { ms: 0 }, response } = behaviour(host);
 
-        if (response) {
+        if (response?.intercept) {
             const statusCode = response?.statusCode || 200;
             console.log(`Modifying response with statusCode ${statusCode} and latency ${latency.ms}ms`)
             const [client, server] = FakeSocket.createPair();
